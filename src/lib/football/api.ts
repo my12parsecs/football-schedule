@@ -387,7 +387,13 @@ export async function getSeasonMatches(leagues: LeagueCode[], clubIds: number[] 
     // league feeds. Keep the league path for direct API consumers/fallbacks.
     useClubFeeds ? Promise.resolve([]) : Promise.all(leagues.map((code) => getLeagueSeason(code))),
     useBulkFeeds
-      ? getBulkCupSeason().then((result) => [result])
+      ? getBulkCupSeason().then(async (result) => {
+          if (!result.error) return [result];
+          // A token may not have access to every cup in the combined request.
+          // Fall back to team feeds so an unavailable bulk competition does
+          // not make all non-league fixtures disappear from the board.
+          return Promise.all([...new Set(clubIds)].map((id) => getClubSeason(id)));
+        })
       : Promise.all([...new Set(clubIds)].map((id) => getClubSeason(id))),
   ]);
 
