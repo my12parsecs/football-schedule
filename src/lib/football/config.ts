@@ -14,10 +14,40 @@ export const LEAGUES: League[] = [
 
 export const LEAGUE_CODES: LeagueCode[] = LEAGUES.map((l) => l.code);
 
+export interface Competition {
+  code: string;
+  name: string;
+  accent: string;
+}
+
+/** Common cup and European competitions supported by football-data.org. */
+export const CUP_COMPETITIONS: Competition[] = [
+  { code: "FAC", name: "FA Cup", accent: "#ef4444" },
+  { code: "FLC", name: "Carabao Cup", accent: "#dc2626" },
+  { code: "CDR", name: "Copa del Rey", accent: "#f59e0b" },
+  { code: "CIT", name: "Coppa Italia", accent: "#0ea5e9" },
+  { code: "DFB", name: "DFB-Pokal", accent: "#7c3aed" },
+  { code: "CDF", name: "Coupe de France", accent: "#0891b2" },
+  { code: "CL", name: "Champions League", accent: "#2563eb" },
+  { code: "EL", name: "Europa League", accent: "#f97316" },
+  { code: "UCL", name: "Conference League", accent: "#16a34a" },
+];
+
+export const CUP_COMPETITION_CODES = CUP_COMPETITIONS.map(({ code }) => code);
+
 const BY_CODE = new Map<string, League>(LEAGUES.map((l) => [l.code, l]));
 
 export function getLeague(code: string): League | undefined {
   return BY_CODE.get(code);
+}
+
+const COMPETITIONS = new Map<string, Competition>([
+  ...LEAGUES.map((league) => [league.code, league] as const),
+  ...CUP_COMPETITIONS.map((competition) => [competition.code, competition] as const),
+]);
+
+export function getCompetition(code: string): Competition | undefined {
+  return COMPETITIONS.get(code);
 }
 
 export function isLeagueCode(value: string): value is LeagueCode {

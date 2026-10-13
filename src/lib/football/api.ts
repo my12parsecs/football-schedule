@@ -1,5 +1,5 @@
 import { cacheLife } from "next/cache";
-import { LEAGUES, getLeague } from "./config";
+import { CUP_COMPETITION_CODES, LEAGUES, getLeague } from "./config";
 import { sampleClubs, sampleMatches, sampleTable } from "./sample";
 import type {
   CatalogResponse,
@@ -116,11 +116,11 @@ function normaliseTeam(team: ApiTeam | undefined): MatchTeam {
   };
 }
 
-function normaliseMatch(raw: ApiMatch, league: LeagueCode): Match | null {
+function normaliseMatch(raw: ApiMatch, fallbackCompetition: string): Match | null {
   if (!raw.id || !raw.utcDate) return null;
   return {
     id: raw.id,
-    league,
+    league: raw.competition?.code ?? fallbackCompetition,
     utcDate: raw.utcDate,
     status: normaliseStatus(raw.status),
     matchday: raw.matchday ?? null,
@@ -202,15 +202,17 @@ export async function getCatalog(): Promise<CatalogResponse> {
 }
 
 /**
- * One league's full current season.
+ * One competition's full current season.
  *
  * **The cached unit is a single league, not a set of leagues.** That matters:
  * `use cache` keys on the arguments, so caching a `LeagueCode[]` would make
  * `[PL]`, `[PL, PD]` and `[PL, PD, SA]` three unrelated entries that each
  * refetch every league in the set. Adding clubs one league at a time would
  * then cost 1+2+3+4+5 = 15 upstream calls and blow the 10/minute free tier.
- * Keyed per league, each one is fetched at most once per cache period no
- * matter which combination asks for it.
+ * Keyed per competition, each one is fetched at most once per cache period no
+ * matter which combination asks for it. Cup and European matches are supplied
+ * by the cached team feeds below because the app only needs those matches for
+ * selected clubs.
  *
  * The whole season is fetched rather than a date window so "last N matches"
  * stays answerable through an international break.
@@ -237,7 +239,16 @@ async function getLeagueSeason(league: LeagueCode): Promise<{
       new Date(now.getTime() + 180 * 86_400_000),
       now,
     );
-    return { source: "sample", matches, error: null, fetchedAt };
+    // Keep the keyless demo representative of the real feed: a few generated
+    // fixtures stand in for domestic cups and Europe.
+    const domesticCup = { PL: "FAC", PD: "CDR", SA: "CIT", BL1: "DFB", FL1: "CDF" }[
+      league
+    ];
+    const sampleCompetitionMatches = matches.map((match, index) => ({
+      ...match,
+      league: index % 23 === 0 ? domesticCup : index % 31 === 0 ? "CL" : match.league,
+    }));
+    return { source: "sample", matches: sampleCompetitionMatches, error: null, fetchedAt };
   }
 
   try {
@@ -260,18 +271,129 @@ async function getLeagueSeason(league: LeagueCode): Promise<{
 }
 
 /**
+ * Team feeds include the club's current-season domestic cup and European
+ * fixtures. They are cached per club, so following another club does not
+ * invalidate the already-loaded club feeds.
+ */
+async function getClubSeason(clubId: number): Promise<{
+  source: DataSource;
+  matches: Match[];
+  error: LeagueError | null;
+  fetchedAt: string;
+}> {
+  "use cache";
+  cacheLife({ stale: 60, revalidate: 120, expire: 900 });
+
+  const apiKey = getApiKey();
+  const fetchedAt = new Date().toISOString();
+  if (!apiKey) return { source: "sample", matches: [], error: null, fetchedAt };
+
+  try {
+    const payload = await request<{ matches?: ApiMatch[] }>(
+      `/teams/${clubId}/matches?limit=500`,
+      apiKey,
+    );
+    const matches = (payload.matches ?? [])
+      .map((raw) => normaliseMatch(raw, "UNKNOWN"))
+      .filter((match): match is Match => match !== null);
+    return { source: "api", matches, error: null, fetchedAt };
+  } catch (reason) {
+    return {
+      source: "api",
+      matches: [],
+      error: { league: `club:${clubId}`, message: errorMessage(reason) },
+      fetchedAt,
+    };
+  }
+}
+
+/**
+ * Bulk cup/European feed used when it is cheaper than one team request per
+ * selected club. The list endpoint caps pages at 500 matches, so follow its
+ * resultSet count until every requested competition is loaded.
+ */
+async function getBulkCupSeason(): Promise<{
+  source: DataSource;
+  matches: Match[];
+  error: LeagueError | null;
+  fetchedAt: string;
+}> {
+  "use cache";
+  cacheLife({ stale: 60, revalidate: 120, expire: 900 });
+
+  const apiKey = getApiKey();
+  const fetchedAt = new Date().toISOString();
+  if (!apiKey) return { source: "sample", matches: [], error: null, fetchedAt };
+
+  const now = new Date(fetchedAt);
+  const seasonStartYear = now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+  const dateFrom = `${seasonStartYear}-07-01`;
+  const dateTo = `${seasonStartYear + 1}-07-01`;
+  const matches: Match[] = [];
+  let offset = 0;
+  let total = 0;
+
+  try {
+    do {
+      const query = new URLSearchParams({
+        competitions: CUP_COMPETITION_CODES.join(","),
+        dateFrom,
+        dateTo,
+        limit: "500",
+        ...(offset > 0 ? { offset: String(offset) } : {}),
+      });
+      const payload = await request<{ resultSet?: { count?: number }; matches?: ApiMatch[] }>(
+        `/matches?${query.toString()}`,
+        apiKey,
+      );
+      const page = (payload.matches ?? [])
+        .map((raw) => normaliseMatch(raw, "UNKNOWN"))
+        .filter((match): match is Match => match !== null);
+      matches.push(...page);
+      total = payload.resultSet?.count ?? matches.length;
+      if (page.length === 0) break;
+      offset += page.length;
+    } while (offset < total);
+
+    return { source: "api", matches, error: null, fetchedAt };
+  } catch (reason) {
+    return {
+      source: "api",
+      matches: [],
+      error: { league: "bulk-cups", message: errorMessage(reason) },
+      fetchedAt,
+    };
+  }
+}
+
+/**
  * Current-season matches for several leagues, assembled from the per-league
  * caches above. Not itself cached — it is just a fan-out over cached units.
  */
-export async function getSeasonMatches(leagues: LeagueCode[]): Promise<{
+export async function getSeasonMatches(leagues: LeagueCode[], clubIds: number[] = []): Promise<{
   source: DataSource;
   matches: Match[];
   errors: LeagueError[];
   fetchedAt: string;
 }> {
-  const results = await Promise.all(leagues.map((code) => getLeagueSeason(code)));
+  const uniqueLeagues = new Set(leagues).size;
+  // The bulk feed is currently expected to take two pages (500 per page).
+  // Only use it when that plus the league feeds beats one request per club.
+  const useBulkFeeds =
+    clubIds.length > 0 && clubIds.length > uniqueLeagues + 2 && getApiKey() !== null;
+  const useClubFeeds = clubIds.length > 0 && !useBulkFeeds && getApiKey() !== null;
+  const [leagueResults, clubResults] = await Promise.all([
+    // The fixture board supplies club ids, so it does not need these broad
+    // league feeds. Keep the league path for direct API consumers/fallbacks.
+    useClubFeeds ? Promise.resolve([]) : Promise.all(leagues.map((code) => getLeagueSeason(code))),
+    useBulkFeeds
+      ? getBulkCupSeason().then((result) => [result])
+      : Promise.all([...new Set(clubIds)].map((id) => getClubSeason(id))),
+  ]);
 
-  const matches = results.flatMap((result) => result.matches);
+  const results = [...leagueResults, ...clubResults];
+
+  const matches = [...new Map(results.flatMap((result) => result.matches).map((match) => [match.id, match])).values()];
   matches.sort((a, b) => a.utcDate.localeCompare(b.utcDate));
 
   return {

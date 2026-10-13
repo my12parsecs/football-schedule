@@ -1,6 +1,8 @@
 /** Domain types for the fixture board. Shared by the server fetchers and the UI. */
 
 export type LeagueCode = "PL" | "PD" | "SA" | "BL1" | "FL1";
+/** Competition codes returned by football-data.org, including cups. */
+export type CompetitionCode = string;
 
 export interface League {
   code: LeagueCode;
@@ -52,7 +54,8 @@ export interface MatchScore {
 
 export interface Match {
   id: number;
-  league: LeagueCode;
+  /** football-data.org competition code, e.g. PL, FAC, FLC, CL or EL. */
+  league: CompetitionCode;
   /** ISO 8601 kickoff in UTC. The UI converts to the viewer's local zone. */
   utcDate: string;
   status: MatchStatus;
@@ -66,7 +69,8 @@ export interface Match {
 
 /** A league we failed to load, reported alongside whatever did load. */
 export interface LeagueError {
-  league: LeagueCode;
+  /** Parent league code, or `club:<id>` for a team-scoped feed failure. */
+  league: string;
   message: string;
 }
 

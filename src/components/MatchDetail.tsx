@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { formatKickoff } from "@/lib/date";
-import { getLeague } from "@/lib/football/config";
+import { getCompetition } from "@/lib/football/config";
 import { buildMatchDetail, type ClubContext, type Outcome } from "@/lib/football/detail";
 import type { Match } from "@/lib/football/types";
 
@@ -29,7 +29,7 @@ export function MatchDetail({
     [match, seasonMatches],
   );
 
-  const league = getLeague(match.league);
+  const competition = getCompetition(match.league);
   const halfTime =
     match.score.halfTimeHome !== null && match.score.halfTimeAway !== null
       ? `${match.score.halfTimeHome}–${match.score.halfTimeAway}`
@@ -38,7 +38,7 @@ export function MatchDetail({
   return (
     <div className="border-t border-zinc-200 bg-zinc-100/70 px-3 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-800/40">
       <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-        <Fact label="Competition" value={league?.name ?? match.league} />
+        <Fact label="Competition" value={competition?.name ?? match.league} />
         {match.matchday !== null && <Fact label="Matchday" value={String(match.matchday)} />}
         <Fact label="Kick-off" value={formatKickoff(new Date(match.utcDate))} />
         {halfTime && resultsVisible && <Fact label="Half-time" value={halfTime} />}

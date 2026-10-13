@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Crest } from "./Crest";
 import { MatchDetail } from "./MatchDetail";
 import { formatKickoff } from "@/lib/date";
-import { getLeague } from "@/lib/football/config";
+import { getCompetition } from "@/lib/football/config";
 import type { Match, MatchStatus } from "@/lib/football/types";
 
 const LIVE_STATUSES: MatchStatus[] = ["IN_PLAY", "PAUSED"];
@@ -62,8 +62,8 @@ export function FixtureRow({
   seasonMatches: Match[];
 }) {
   const [expanded, setExpanded] = useState(false);
-  const league = getLeague(match.league);
-  const accent = league?.accent ?? "#71717a";
+  const competition = getCompetition(match.league);
+  const accent = competition?.accent ?? "#71717a";
   const status = statusLabel(match);
   const played = hasScore(match);
   const live = isLive(match);
@@ -136,11 +136,11 @@ export function FixtureRow({
         {/* League marker, dropped on narrow screens where space is tight */}
         <div className="hidden justify-end sm:flex">
           <span
-            title={league?.name}
+            title={competition?.name ?? match.league}
             className="rounded px-1.5 py-0.5 text-[0.625rem] font-semibold tracking-wide"
             style={{ backgroundColor: `${accent}1f`, color: accent }}
           >
-            {match.league}
+            {competition?.code ?? match.league}
           </span>
         </div>
 

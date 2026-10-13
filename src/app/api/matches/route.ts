@@ -6,12 +6,12 @@ function badRequest(message: string) {
 }
 
 /**
- * GET /api/matches?leagues=PL,SA
+ * GET /api/matches?leagues=PL,SA&clubs=65,86
  *
- * Returns the full current season for the named leagues. Narrowing to the
- * user's clubs and to "last N / next N" happens in the browser, so changing
- * clubs or the match count costs no request at all — only following a club in
- * a league that has not been loaded yet does.
+ * Returns the full current season for the named leagues plus the current-season
+ * matches for the selected clubs. The team feeds add domestic-cup and European
+ * fixtures that are not present in the league feeds. Narrowing to "last N /
+ * next N" happens in the browser.
  *
  * Reading the query string makes this request-time, but each league behind
  * `getSeasonMatches` is individually cached, so repeat loads and overlapping
@@ -19,9 +19,14 @@ function badRequest(message: string) {
  */
 export async function GET(request: NextRequest) {
   const leagues = parseLeagues(request.nextUrl.searchParams.get("leagues"));
-  if (leagues.length === 0) {
-    return badRequest("Specify at least one league code (PL, PD, SA, BL1, FL1).");
+  const clubIds = request.nextUrl.searchParams
+    .get("clubs")
+    ?.split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0) ?? [];
+  if (leagues.length === 0 && clubIds.length === 0) {
+    return badRequest("Specify at least one league code or club id.");
   }
 
-  return Response.json(await getSeasonMatches(leagues));
+  return Response.json(await getSeasonMatches(leagues, clubIds));
 }

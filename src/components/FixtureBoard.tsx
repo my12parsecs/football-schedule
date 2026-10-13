@@ -28,23 +28,21 @@ const LIVE_REFRESH_MS = 60_000;
  * afterwards — following or unfollowing clubs, switching 5/10/20 — is computed
  * from this with no further requests.
  */
-interface LeagueEntry {
-  matches: Match[];
-  /** Kept per league so the freshness label reflects the *oldest* data shown. */
-  fetchedAt: string;
-}
-
 interface MatchStore {
-  byLeague: Partial<Record<LeagueCode, LeagueEntry>>;
-  /** Leagues already requested, so a failure is not retried in a loop. */
-  attempted: LeagueCode[];
+  matches: Match[];
+  /** Parent leagues and club feeds already requested. */
+  attemptedLeagues: LeagueCode[];
+  attemptedClubIds: number[];
+  fetchedAt: string | null;
   source: DataSource | null;
   errors: LeagueError[];
 }
 
 const EMPTY_STORE: MatchStore = {
-  byLeague: {},
-  attempted: [],
+  matches: [],
+  attemptedLeagues: [],
+  attemptedClubIds: [],
+  fetchedAt: null,
   source: null,
   errors: [],
 };
@@ -118,11 +116,11 @@ export function FixtureBoard() {
   // Only leagues we have never asked for. Unfollowing a club never lands here,
   // so narrowing the selection costs nothing, and re-following a club in an
   // already-loaded league is free too.
-  const missingLeagues = useMemo(
-    () => selectedLeagues.filter((code) => !store.attempted.includes(code)),
-    [selectedLeagues, store.attempted],
+  const missingClubIds = useMemo(
+    () => settings.clubIds.filter((id) => !store.attemptedClubIds.includes(id)),
+    [settings.clubIds, store.attemptedClubIds],
   );
-  const missingKey = missingLeagues.join(",");
+  const missingKey = missingClubIds.join(",");
 
   // Loading is derived: if a league is still outstanding, a request is in
   // flight or about to be.
@@ -133,9 +131,13 @@ export function FixtureBoard() {
 
     const controller = new AbortController();
     (async () => {
-      const requested = missingKey.split(",") as LeagueCode[];
+      const requestedLeagues: LeagueCode[] = [];
+      const requestedClubIds = missingKey.split(",").map(Number).filter(Number.isInteger);
       try {
-        const res = await fetch(`/api/matches?leagues=${missingKey}`, {
+        const query = new URLSearchParams();
+        query.set("leagues", selectedLeagues.join(","));
+        query.set("clubs", settings.clubIds.join(","));
+        const res = await fetch(`/api/matches?${query.toString()}`, {
           signal: controller.signal,
           cache: "no-store",
         });
@@ -145,16 +147,11 @@ export function FixtureBoard() {
         }
         const payload = (await res.json()) as MatchesResponse;
 
-        // Bucket by league so each one can be kept and reused on its own.
-        const grouped: Partial<Record<LeagueCode, LeagueEntry>> = {};
-        for (const code of requested) {
-          grouped[code] = { matches: [], fetchedAt: payload.fetchedAt };
-        }
-        for (const match of payload.matches) grouped[match.league]?.matches.push(match);
-
         setStore((prev) => ({
-          byLeague: { ...prev.byLeague, ...grouped },
-          attempted: [...new Set([...prev.attempted, ...requested])],
+          matches: [...new Map([...prev.matches, ...payload.matches].map((match) => [match.id, match])).values()],
+          attemptedLeagues: [...new Set([...prev.attemptedLeagues, ...requestedLeagues])],
+          attemptedClubIds: [...new Set([...prev.attemptedClubIds, ...requestedClubIds])],
+          fetchedAt: payload.fetchedAt,
           source: payload.source,
           errors: payload.errors,
         }));
@@ -164,35 +161,25 @@ export function FixtureBoard() {
         // Mark them attempted anyway, or the effect would retry forever.
         setStore((prev) => ({
           ...prev,
-          attempted: [...new Set([...prev.attempted, ...requested])],
+          attemptedLeagues: [...new Set([...prev.attemptedLeagues, ...requestedLeagues])],
+          attemptedClubIds: [...new Set([...prev.attemptedClubIds, ...requestedClubIds])],
         }));
         setFailure(error instanceof Error ? error.message : "Could not load fixtures.");
       }
     })();
 
     return () => controller.abort();
-  }, [missingKey, hydrated]);
+  }, [missingKey, hydrated, selectedLeagues, settings.clubIds]);
 
   const matchesError = failure;
 
-  const loadedEntries = useMemo(
-    () =>
-      selectedLeagues
-        .map((code) => store.byLeague[code])
-        .filter((entry): entry is LeagueEntry => entry !== undefined),
-    [selectedLeagues, store.byLeague],
-  );
-
-  /** Every match in the leagues we follow, already in the browser. */
-  const seasonMatches = useMemo(
-    () => loadedEntries.flatMap((entry) => entry.matches),
-    [loadedEntries],
-  );
+  /** Every league and club-feed match already in the browser. */
+  const seasonMatches = store.matches;
 
   // The oldest league on screen is the honest answer for "how fresh is this".
   const loadedAt = useMemo(
-    () => loadedEntries.map((entry) => entry.fetchedAt).sort()[0] ?? null,
-    [loadedEntries],
+    () => store.fetchedAt,
+    [store.fetchedAt],
   );
 
   // Narrowing to the followed clubs and to last/next N happens here, so club
@@ -211,7 +198,12 @@ export function FixtureBoard() {
 
   /** Drop the "already asked" marks so the next render refetches those leagues. */
   const refresh = useCallback(() => {
-    setStore((prev) => ({ ...prev, attempted: [], errors: [] }));
+    setStore((prev) => ({
+      ...prev,
+      attemptedLeagues: [],
+      attemptedClubIds: [],
+      errors: [],
+    }));
     setFailure(null);
   }, []);
 
